@@ -1,0 +1,159 @@
+import streamlit as st
+from datetime import date, datetime
+
+# --- App setup ---
+st.set_page_config(page_title="Family Chores Tracker", page_icon="🧹", layout="centered")
+st.title("🧹 Family Chores Tracker")
+st.caption("Keep chores fun with points, rewards, a leaderboard — and daily reminders! 🎉")
+
+# --- Initialize state ---
+if "chores" not in st.session_state:
+    st.session_state.chores = []
+if "user_points" not in st.session_state:
+    st.session_state.user_points = {}
+if "last_reset_date" not in st.session_state:
+    st.session_state.last_reset_date = date.today()
+
+# --- Daily reset for repeat-daily chores ---
+today = date.today()
+if st.session_state.last_reset_date != today:
+    # Reset only chores marked repeat_daily (set done -> False for a new day)
+    for c in st.session_state.chores:
+        if c.get("repeat_daily"):
+            c["done"] = False
+            # Optionally shift due date to today if you want daily items to always be "due today"
+            if c.get("due_date"):
+                try:
+                    d = datetime.strptime(c["due_date"], "%Y-%m-%d").date()
+                    # If old due date is before today, bring it forward to today for visibility
+                    if d < today:
+                        c["due_date"] = today.isoformat()
+                except Exception:
+                    pass
+    st.session_state.last_reset_date = today
+
+# --- Helper filters for reminders ---
+def parse_date_str(dstr):
+    if not dstr:
+        return None
+    try:
+        return datetime.strptime(dstr, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+def partition_chores_for_reminder():
+    due_today, overdue, pending_nodate = [], [], []
+    for i, c in enumerate(st.session_state.chores):
+        if c["done"]:
+            continue
+        d = parse_date_str(c.get("due_date"))
+        if d is None:
+            pending_nodate.append((i, c))
+        else:
+            if d == today:
+                due_today.append((i, c))
+            elif d < today:
+                overdue.append((i, c))
+            else:
+                # Not due yet -> we don't list it in banner
+                pass
+    return due_today, overdue, pending_nodate
+
+due_today, overdue, pending_nodate = partition_chores_for_reminder()
+
+# --- Daily Reminder banner ---
+if due_today or overdue or pending_nodate:
+    with st.container(border=True):
+        st.markdown("### 🔔 Daily Reminders")
+        if overdue:
+            st.error("⏰ **Overdue**")
+            for i, c in overdue:
+                st.write(f"- **{c['task']}** — *{c['assigned']}* ({c['points']} pts) • Due: {c.get('due_date', '—')}")
+        if due_today:
+            st.warning("✅ **Due Today**")
+            for i, c in due_today:
+                st.write(f"- **{c['task']}** — *{c['assigned']}* ({c['points']} pts)")
+        if pending_nodate:
+            st.info("📝 **Pending (no due date)**")
+            for i, c in pending_nodate:
+                st.write(f"- **{c['task']}** — *{c['assigned']}* ({c['points']} pts)")
+
+# --- Add New Chore ---
+with st.expander("➕ Add a New Chore"):
+    with st.form("add_chore_form"):
+        task = st.text_input("Chore")
+        assigned = st.text_input("Assigned To")
+        points = st.number_input("Points", min_value=1, step=1, value=5)
+        due = st.date_input("Due Date (optional)", value=None, format="YYYY-MM-DD")
+        repeat_daily = st.checkbox("Repeat Daily", value=False, help="Resets to not done every day")
+        submitted = st.form_submit_button("Add Chore")
+        if submitted and task and assigned:
+            st.session_state.chores.append(
+                {
+                    "task": task,
+                    "assigned": assigned,
+                    "done": False,
+                    "points": int(points),
+                    "due_date": due.isoformat() if due else "",
+                    "repeat_daily": repeat_daily,
+                }
+            )
+            if assigned not in st.session_state.user_points:
+                st.session_state.user_points[assigned] = 0
+            st.success(f"✅ Added: {task} for {assigned} ({points} pts){' • 🔁 Daily' if repeat_daily else ''}")
+
+# --- Current Chores ---
+st.header("📋 Current Chores")
+if not st.session_state.chores:
+    st.info("No chores yet! Add one above.")
+else:
+    for i, c in enumerate(st.session_state.chores):
+        col1, col2, col3, col4 = st.columns([4, 2, 2, 2])
+        due_label = f" • 📅 {c['due_date']}" if c.get("due_date") else ""
+        daily_tag = " • 🔁 daily" if c.get("repeat_daily") else ""
+        status = "✅ Done" if c["done"] else "❌ Pending"
+        col1.write(f"**{c['task']}** — *{c['assigned']}*{due_label}{daily_tag}  \n_{status}_")
+        col2.write(f"{c['points']} pts")
+        if not c["done"]:
+            if col3.button(f"Mark Done", key=f"done_{i}"):
+                c["done"] = True
+                st.session_state.user_points[c["assigned"]] += c["points"]
+                st.balloons()
+                st.success(f"{c['assigned']} earned {c['points']} pts!")
+        # Optional: quick edit due date
+        with col4.popover("Edit"):
+            new_due = st.date_input("Due Date", value=parse_date_str(c.get("due_date")) or today, key=f"due_{i}")
+            new_repeat = st.checkbox("Repeat Daily", value=c.get("repeat_daily", False), key=f"rep_{i}")
+            if st.button("Save", key=f"save_{i}"):
+                c["due_date"] = new_due.isoformat() if new_due else ""
+                c["repeat_daily"] = bool(new_repeat)
+                st.success("Saved!")
+
+# --- Leaderboard ---
+st.header("🏆 Leaderboard")
+if st.session_state.user_points:
+    sorted_users = sorted(st.session_state.user_points.items(), key=lambda x: -x[1])
+    for rank, (user, pts) in enumerate(sorted_users, 1):
+        medal = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else "⭐"
+        st.write(f"{medal} **{user}** — {pts} pts")
+else:
+    st.info("No points earned yet. Complete chores to get started!")
+
+# --- Rewards Shop ---
+reward_shop = {
+    "🍬 Candy Treat": 10,
+    "🎮 30 min Extra Game Time": 20,
+    "🎥 Pick Family Movie": 25,
+    "🛌 Skip a Small Chore": 30,
+}
+st.header("🎁 Rewards Shop")
+chosen_user = st.selectbox("Who wants to redeem?", options=[""] + list(st.session_state.user_points.keys()))
+if chosen_user:
+    for reward, cost in reward_shop.items():
+        if st.button(f"Redeem {reward} ({cost} pts)", key=f"reward_{reward}"):
+            if st.session_state.user_points[chosen_user] >= cost:
+                st.session_state.user_points[chosen_user] -= cost
+                st.success(f"🎉 {chosen_user} redeemed {reward} for {cost} pts!")
+                st.snow()
+            else:
+                st.error(f"⚠️ {chosen_user} needs {cost} pts but has {st.session_state.user_points[chosen_user]} pts.")
